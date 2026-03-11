@@ -3,6 +3,13 @@ import type { Config } from "tailwindcss";
 export default {
   darkMode: ["class"],
   content: ["./pages/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./app/**/*.{ts,tsx}", "./src/**/*.{ts,tsx}"],
+  safelist: [
+    "bg-agent-analyst/10", "bg-agent-analyst/20", "bg-agent-analyst", "text-agent-analyst",
+    "bg-agent-critic/10", "bg-agent-critic/20", "bg-agent-critic", "text-agent-critic",
+    "bg-agent-optimist/10", "bg-agent-optimist/20", "bg-agent-optimist", "text-agent-optimist",
+    "bg-agent-risk/10", "bg-agent-risk/20", "bg-agent-risk", "text-agent-risk",
+    "bg-agent-synthesizer/10", "bg-agent-synthesizer/20", "bg-agent-synthesizer", "text-agent-synthesizer",
+  ],
   prefix: "",
   theme: {
     container: {
