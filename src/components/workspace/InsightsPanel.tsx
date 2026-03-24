@@ -1,17 +1,16 @@
 import { motion } from "framer-motion";
-import { X, BarChart3, ShieldAlert, Sun, AlertTriangle, Layers } from "lucide-react";
+import { X, BarChart3, ShieldAlert, Sun, Layers } from "lucide-react";
 
 const agents = [
-  { name: "Analyst", icon: BarChart3, color: "agent-analyst", strength: 85, influence: 30 },
-  { name: "Critic", icon: ShieldAlert, color: "agent-critic", strength: 72, influence: 25 },
+  { name: "Analyst", icon: BarChart3, color: "agent-analyst", strength: 85, influence: 35 },
+  { name: "Critic", icon: ShieldAlert, color: "agent-critic", strength: 78, influence: 30 },
   { name: "Optimist", icon: Sun, color: "agent-optimist", strength: 68, influence: 20 },
-  { name: "Risk Assessor", icon: AlertTriangle, color: "agent-risk", strength: 78, influence: 15 },
-  { name: "Synthesizer", icon: Layers, color: "agent-synthesizer", strength: 90, influence: 10 },
+  { name: "Synthesizer", icon: Layers, color: "agent-synthesizer", strength: 90, influence: 15 },
 ];
 
 const contradictions = [
   { a: "Analyst", b: "Critic", topic: "Market demand assumptions" },
-  { a: "Optimist", b: "Risk Assessor", topic: "Growth vs. regulatory risk" },
+  { a: "Optimist", b: "Critic", topic: "Growth vs. regulatory risk" },
 ];
 
 interface Props {
@@ -101,7 +100,6 @@ function agentColor(name: string) {
     Analyst: "agent-analyst",
     Critic: "agent-critic",
     Optimist: "agent-optimist",
-    "Risk Assessor": "agent-risk",
     Synthesizer: "agent-synthesizer",
   };
   return map[name] || "primary";

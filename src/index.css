@@ -38,7 +38,6 @@
     --agent-analyst: 220 80% 55%;
     --agent-critic: 0 70% 55%;
     --agent-optimist: 140 60% 45%;
-    --agent-risk: 35 90% 55%;
     --agent-synthesizer: 270 70% 60%;
 
     /* Custom tokens */
@@ -93,6 +92,33 @@
   }
   .gradient-border {
     border-image: linear-gradient(135deg, hsl(var(--primary) / 0.4), hsl(var(--accent) / 0.4)) 1;
+  }
+
+  /* Custom Animations and utility classes added for enhanced Landing Page */
+  .bg-300\% {
+    background-size: 300% 300%;
+  }
+  .animate-gradient {
+    animation: animatedgradient 6s ease infinite alternate;
+  }
+  @keyframes animatedgradient {
+    0% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0% 50%;
+    }
+  }
+
+  .scrollbar-hide {
+    -ms-overflow-style: none; /* IE and Edge */
+    scrollbar-width: none; /* Firefox */
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none; /* Chrome, Safari and Opera */
   }
 }
 

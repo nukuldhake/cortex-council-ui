@@ -1,16 +1,53 @@
-import { useState } from "react";
-import { motion } from "framer-motion";
-import { Send, PanelLeftOpen, PanelRightOpen, BarChart3, ShieldAlert, Sun, AlertTriangle, Layers, User } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  Send, PanelLeftOpen, PanelRightOpen,
+  BarChart3, ShieldAlert, Sun, Crown, User, Pause, Square, Play,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-const agentMeta: Record<string, { icon: typeof BarChart3; color: string }> = {
-  Analyst: { icon: BarChart3, color: "agent-analyst" },
-  Critic: { icon: ShieldAlert, color: "agent-critic" },
-  Optimist: { icon: Sun, color: "agent-optimist" },
-  "Risk Assessor": { icon: AlertTriangle, color: "agent-risk" },
-  Synthesizer: { icon: Layers, color: "agent-synthesizer" },
+// ── Agent metadata ─────────────────────────────────────────────────────────────
+//
+// FIX: Tailwind purges dynamic class strings like `bg-${color}` at build time —
+// they never make it into the CSS bundle, so the styles silently disappear.
+// Solution: use static, complete class strings that Tailwind can detect.
+
+const agentMeta: Record<string, {
+  icon: typeof BarChart3;
+  bgClass: string;       // icon background
+  textClass: string;     // label / icon colour
+  borderClass: string;   // bubble border accent
+}> = {
+  Optimist: {
+    icon: Sun,
+    bgClass: "bg-yellow-500/10",
+    textClass: "text-yellow-500",
+    borderClass: "border-yellow-500/20",
+  },
+  Analyst: {
+    icon: BarChart3,
+    bgClass: "bg-blue-500/10",
+    textClass: "text-blue-400",
+    borderClass: "border-blue-500/20",
+  },
+  Critic: {
+    icon: ShieldAlert,
+    bgClass: "bg-red-500/10",
+    textClass: "text-red-400",
+    borderClass: "border-red-500/20",
+  },
+  Judge: {
+    icon: Crown,
+    bgClass: "bg-purple-500/10",
+    textClass: "text-purple-400",
+    borderClass: "border-purple-500/30",
+  },
 };
+
+const AGENT_SEQUENCE = ["Optimist", "Analyst", "Critic", "Judge"];
+
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 interface Message {
   id: number;
@@ -20,14 +57,12 @@ interface Message {
   replyTo?: string;
 }
 
-const initialMessages: Message[] = [
-  { id: 1, role: "user", text: "Should we launch an AI tutoring startup?" },
-  { id: 2, role: "agent", agent: "Analyst", text: "The EdTech market is valued at $340B with 16% CAGR. AI tutoring shows strong demand signals with current LLM capabilities making it technically feasible." },
-  { id: 3, role: "agent", agent: "Critic", text: "Market saturation is a concern. Khan Academy, Duolingo, and Chegg all have AI features. What's the actual differentiation here?", replyTo: "Analyst" },
-  { id: 4, role: "agent", agent: "Optimist", text: "Personalized learning at scale remains unsolved. There's massive opportunity in underserved markets — specialized subjects, non-English languages, professional certifications." },
-  { id: 5, role: "agent", agent: "Risk Assessor", text: "Key risks to consider: regulatory scrutiny on AI in education, content accuracy liability, and high CAC in EdTech. Data privacy for minors is also critical.", replyTo: "Optimist" },
-  { id: 6, role: "agent", agent: "Synthesizer", text: "Market opportunity exists but requires clear differentiation. Recommend a niche-first approach targeting specialized subjects. Run a small pilot before full launch to validate demand and unit economics." },
-];
+// Structured history entry sent to the backend
+interface HistoryEntry {
+  role?: "user";
+  agent?: string;
+  text: string;
+}
 
 interface Props {
   onToggleSidebar: () => void;
@@ -36,27 +71,193 @@ interface Props {
   insightsOpen: boolean;
 }
 
+// ── Typing indicator ───────────────────────────────────────────────────────────
+
 const TypingIndicator = ({ agent }: { agent: string }) => {
   const meta = agentMeta[agent];
+  if (!meta) return null;
+  const Icon = meta.icon;
   return (
-    <div className="flex items-center gap-2 px-4 py-2">
-      <div className={`w-6 h-6 rounded-md bg-${meta?.color}/10 flex items-center justify-center`}>
-        {meta && <meta.icon className={`w-3 h-3 text-${meta.color}`} />}
+    <motion.div
+      className="flex items-center gap-2 px-4 py-2 max-w-3xl mx-auto"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      <div className={`w-6 h-6 rounded-md ${meta.bgClass} flex items-center justify-center`}>
+        <Icon className={`w-3 h-3 ${meta.textClass}`} />
       </div>
-      <span className={`text-xs text-${meta?.color}`}>{agent} is analyzing…</span>
+      <span className={`text-xs ${meta.textClass}`}>{agent} is typing…</span>
       <div className="flex gap-0.5">
         <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-typing-dot-1" />
         <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-typing-dot-2" />
         <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-typing-dot-3" />
       </div>
-    </div>
+    </motion.div>
   );
 };
 
+// ── Component ──────────────────────────────────────────────────────────────────
+
 const DebateChat = ({ onToggleSidebar, onToggleInsights, sidebarOpen, insightsOpen }: Props) => {
   const [input, setInput] = useState("");
-  const [messages] = useState<Message[]>(initialMessages);
-  const [typing] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [status, setStatus] = useState<"idle" | "running" | "paused">("idle");
+  const [typingAgent, setTypingAgent] = useState("");
+  const [sessionTitle, setSessionTitle] = useState("New Council Session");
+  const [round, setRound] = useState(0);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const latestTopicRef = useRef("");
+  const statusRef = useRef(status);
+  const messagesRef = useRef(messages);
+  const roundRef = useRef(round);            // FIX: track round in ref so callbacks see latest value
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { statusRef.current = status; }, [status]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { roundRef.current = round; }, [round]);
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, typingAgent]);
+
+  // ── Build structured history for backend ──────────────────────────────────
+  //
+  // FIX: Previously sent a raw string. Now sends a structured array so the
+  // backend can format it correctly and agents get clean, consistent context.
+
+  const buildHistory = (msgs: Message[]): HistoryEntry[] =>
+    msgs.map((m) =>
+      m.role === "user"
+        ? { role: "user", text: m.text }
+        : { agent: m.agent, text: m.text }
+    );
+
+  // ── Call a single agent ────────────────────────────────────────────────────
+
+  const callAgent = async (
+    agentName: string,
+    history: HistoryEntry[],
+    topic: string,
+  ): Promise<string> => {
+    const res = await fetch("http://localhost:8000/api/debate/turn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent: agentName, history, topic }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Agent ${agentName} failed (${res.status})`);
+    }
+    const data = await res.json();
+    return data.text || "...";
+  };
+
+  // ── Debate runner ──────────────────────────────────────────────────────────
+
+  const runDebate = useCallback(async (
+    startMessages: Message[],
+    currentTopic: string,
+  ) => {
+    setStatus("running");
+    statusRef.current = "running";
+    setErrorMsg(null);
+
+    // FIX: increment round using the ref so we always have the correct value
+    const currentRound = roundRef.current + 1;
+    setRound(currentRound);
+    roundRef.current = currentRound;
+
+    let currentMsgs = [...startMessages];
+
+    try {
+      for (let i = 0; i < AGENT_SEQUENCE.length; i++) {
+        if (statusRef.current !== "running") return;
+
+        const agentName = AGENT_SEQUENCE[i];
+        const prevAgent = i > 0 ? AGENT_SEQUENCE[i - 1] : "You";
+
+        setTypingAgent(agentName);
+
+        // FIX: pass structured history array, not a string
+        const history = buildHistory(currentMsgs);
+        const agentText = await callAgent(agentName, history, currentTopic);
+
+        if (statusRef.current !== "running") return;
+
+        const newMsg: Message = {
+          id: Date.now() + Math.random(),
+          role: "agent",
+          agent: agentName,
+          text: agentText,
+          replyTo: prevAgent,
+        };
+
+        currentMsgs = [...currentMsgs, newMsg];
+        setMessages(currentMsgs);
+      }
+
+      setTypingAgent("");
+      setStatus("paused");
+      statusRef.current = "paused";
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Something went wrong";
+      console.error("Debate error:", msg);
+      setErrorMsg(msg);
+      setTypingAgent("");
+      setStatus("paused");
+      statusRef.current = "paused";
+    }
+  }, []);
+
+  // ── Send handler ───────────────────────────────────────────────────────────
+
+  const handleSend = () => {
+    if (!input.trim() || status === "running") return;
+    const userText = input.trim();
+    setErrorMsg(null);
+
+    if (messages.length === 0) {
+      setSessionTitle(userText.length > 40 ? userText.substring(0, 40) + "…" : userText);
+    }
+
+    // FIX: set topic BEFORE updating messages to avoid any async ordering issues
+    latestTopicRef.current = userText;
+
+    const newMsg: Message = { id: Date.now(), role: "user", text: userText };
+    const updated = [...messages, newMsg];
+    setMessages(updated);
+    setInput("");
+
+    runDebate(updated, userText);
+  };
+
+  // FIX: handleResume no longer passes stale `round` — runDebate reads roundRef internally
+  const handleResume = () => {
+    runDebate(messagesRef.current, latestTopicRef.current);
+  };
+
+  const handlePause = () => {
+    setStatus("paused");
+    statusRef.current = "paused";
+    setTypingAgent("");
+  };
+
+  const handleStop = () => {
+    setStatus("idle");
+    statusRef.current = "idle";
+    setTypingAgent("");
+    setErrorMsg(null);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex-1 flex flex-col min-w-0">
@@ -64,42 +265,81 @@ const DebateChat = ({ onToggleSidebar, onToggleInsights, sidebarOpen, insightsOp
       <header className="h-14 border-b border-border flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-3">
           {!sidebarOpen && (
-            <button onClick={onToggleSidebar} className="text-muted-foreground hover:text-foreground transition-colors">
+            <button
+              onClick={onToggleSidebar}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
               <PanelLeftOpen className="w-4 h-4" />
             </button>
           )}
           <div>
-            <h2 className="font-heading text-sm font-semibold text-foreground">AI Tutoring Startup</h2>
+            <h2 className="font-heading text-sm font-semibold text-foreground">{sessionTitle}</h2>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-agent-optimist" />
-                Round 2 of 3
+                <span className={`w-1.5 h-1.5 rounded-full transition-colors ${status === "running"
+                    ? "bg-green-500 animate-pulse"
+                    : status === "paused"
+                      ? "bg-amber-500"
+                      : "bg-muted-foreground"
+                  }`} />
+                {status === "running"
+                  ? "Debating"
+                  : status === "paused"
+                    ? `Paused · Round ${round}`
+                    : "Ready"}
               </span>
-              <span>•</span>
-              <span>Debate Phase: Analysis</span>
+              {round > 0 && <><span>•</span><span>Round {round}</span></>}
             </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Progress bar */}
           <div className="w-24 h-1.5 bg-muted rounded-full overflow-hidden">
-            <div className="w-2/3 h-full bg-primary rounded-full" />
+            <div className={`h-full rounded-full transition-all duration-500 ${status === "running"
+                ? "w-2/3 bg-green-500 animate-pulse"
+                : status === "paused"
+                  ? "w-1/2 bg-amber-500"
+                  : "w-full bg-primary"
+              }`} />
           </div>
           {!insightsOpen && (
-            <button onClick={onToggleInsights} className="text-muted-foreground hover:text-foreground transition-colors">
+            <button
+              onClick={onToggleInsights}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
               <PanelRightOpen className="w-4 h-4" />
             </button>
           )}
         </div>
       </header>
 
+      {/* Error banner */}
+      <AnimatePresence>
+        {errorMsg && (
+          <motion.div
+            className="bg-red-500/10 border-b border-red-500/20 px-4 py-2 text-xs text-red-400 text-center"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+          >
+            {errorMsg} — you can resume or try a new message.
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+        {messages.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full opacity-50 space-y-4">
+            <Crown className="w-12 h-12 text-primary animate-pulse" />
+            <p className="text-sm font-medium">Drop a topic and let the squad debate it out 🔥</p>
+          </div>
+        )}
+
         {messages.map((msg) => {
           const meta = msg.agent ? agentMeta[msg.agent] : null;
-          const Icon = meta?.icon || User;
+          const Icon = meta?.icon ?? User;
           const isUser = msg.role === "user";
-          const isSynthesizer = msg.agent === "Synthesizer";
+          const isJudge = msg.agent === "Judge";
 
           return (
             <motion.div
@@ -107,27 +347,30 @@ const DebateChat = ({ onToggleSidebar, onToggleInsights, sidebarOpen, insightsOp
               className={`flex gap-3 max-w-3xl mx-auto ${isUser ? "flex-row-reverse" : ""}`}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3 }}
+              transition={{ duration: 0.25 }}
             >
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
-                isUser ? "bg-primary/10" : `bg-${meta?.color}/10`
-              }`}>
-                <Icon className={`w-4 h-4 ${isUser ? "text-primary" : `text-${meta?.color}`}`} />
+              {/* Avatar */}
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${isUser ? "bg-primary/10" : (meta?.bgClass ?? "bg-muted")
+                }`}>
+                <Icon className={`w-4 h-4 ${isUser ? "text-primary" : (meta?.textClass ?? "text-muted-foreground")}`} />
               </div>
+
+              {/* Bubble */}
               <div className={`max-w-[75%] ${isUser ? "text-right" : ""}`}>
-                <span className={`text-xs font-medium mb-1 block ${isUser ? "text-primary" : `text-${meta?.color}`}`}>
+                <span className={`text-xs font-medium mb-1 block ${isUser ? "text-primary" : (meta?.textClass ?? "text-muted-foreground")
+                  }`}>
                   {isUser ? "You" : msg.agent}
                   {msg.replyTo && (
-                    <span className="text-muted-foreground font-normal"> → replying to {msg.replyTo}</span>
+                    <span className="text-muted-foreground font-normal"> → {msg.replyTo}</span>
                   )}
                 </span>
-                <div className={`px-4 py-3 text-sm leading-relaxed rounded-2xl ${
-                  isSynthesizer
-                    ? "glass border-primary/20 glow-primary text-foreground"
+
+                <div className={`px-4 py-3 text-sm leading-relaxed rounded-2xl border ${isJudge
+                    ? `bg-purple-500/5 ${meta?.borderClass} text-foreground font-medium`
                     : isUser
-                    ? "bg-primary/10 border border-primary/20 rounded-br-md text-foreground"
-                    : "glass-subtle text-secondary-foreground"
-                }`}>
+                      ? "bg-primary/10 border-primary/20 rounded-br-md text-foreground"
+                      : `bg-muted/40 ${meta?.borderClass ?? "border-border"} text-secondary-foreground`
+                  }`}>
                   {msg.text}
                 </div>
               </div>
@@ -135,63 +378,95 @@ const DebateChat = ({ onToggleSidebar, onToggleInsights, sidebarOpen, insightsOp
           );
         })}
 
-        {typing && <TypingIndicator agent="Critic" />}
+        <AnimatePresence>
+          {status === "running" && typingAgent && (
+            <TypingIndicator agent={typingAgent} />
+          )}
+        </AnimatePresence>
 
-        {/* Final Decision Card */}
-        <motion.div
-          className="max-w-3xl mx-auto mt-6"
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-        >
-          <div className="glass border-primary/30 p-6 glow-primary">
-            <div className="flex items-center gap-2 mb-4">
-              <Layers className="w-5 h-5 text-agent-synthesizer" />
-              <h3 className="font-heading text-base font-semibold text-foreground">Final Consensus</h3>
-              <span className="ml-auto text-xs font-medium text-primary bg-primary/10 px-2.5 py-1 rounded-full">
-                Confidence: 0.78
-              </span>
-            </div>
-
-            <div className="space-y-3 text-sm">
-              <div>
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5">Key Insights</p>
-                <ul className="space-y-1 text-secondary-foreground">
-                  <li className="flex items-start gap-2">
-                    <span className="w-1 h-1 rounded-full bg-agent-optimist mt-2 shrink-0" />
-                    Market opportunity exists in specialized EdTech
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="w-1 h-1 rounded-full bg-agent-risk mt-2 shrink-0" />
-                    Regulatory risk present — especially for minors
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="w-1 h-1 rounded-full bg-agent-analyst mt-2 shrink-0" />
-                    Demand validation required before scaling
-                  </li>
-                </ul>
-              </div>
-              <div className="pt-2 border-t border-border">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5">Recommended Action</p>
-                <p className="text-foreground font-medium">Run a small pilot targeting a niche subject area before committing to full launch.</p>
-              </div>
-            </div>
-          </div>
-        </motion.div>
+        <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <div className="border-t border-border p-4">
+      {/* Input bar */}
+      <div className="border-t border-border p-4 bg-background/50 backdrop-blur-sm">
         <div className="max-w-3xl mx-auto flex gap-2">
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Enter your problem or question…"
+            onKeyDown={handleKeyDown}
+            disabled={status === "running"}
+            placeholder={
+              status === "running"
+                ? `${typingAgent} is typing...`
+                : status === "paused"
+                  ? "Jump in with your thoughts, or hit ▶ to continue..."
+                  : "Drop a topic to debate…"
+            }
             className="flex-1 bg-muted/50 border-border h-11 text-foreground placeholder:text-muted-foreground"
           />
-          <Button className="bg-primary hover:bg-primary/90 text-primary-foreground h-11 px-4">
-            <Send className="w-4 h-4" />
-          </Button>
+
+          {/* Running: Pause + Stop */}
+          {status === "running" && (
+            <div className="flex gap-1.5">
+              <Button
+                onClick={handlePause}
+                variant="outline"
+                className="h-11 px-3 border-amber-500/50 text-amber-500 hover:bg-amber-500/10"
+                title="Pause Debate"
+              >
+                <Pause className="w-4 h-4" />
+              </Button>
+              <Button
+                onClick={handleStop}
+                variant="outline"
+                className="h-11 px-3 border-red-500/50 text-red-500 hover:bg-red-500/10"
+                title="End Debate"
+              >
+                <Square className="w-4 h-4" />
+              </Button>
+            </div>
+          )}
+
+          {/* Paused: Send new message OR Resume + Stop */}
+          {status === "paused" && (
+            <div className="flex gap-1.5">
+              {input.trim() ? (
+                <Button
+                  onClick={handleSend}
+                  className="bg-primary hover:bg-primary/90 text-primary-foreground h-11 px-4"
+                >
+                  <Send className="w-4 h-4" />
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleResume}
+                  className="bg-green-600 hover:bg-green-700 text-white h-11 px-3"
+                  title="Continue Debate"
+                >
+                  <Play className="w-4 h-4" />
+                </Button>
+              )}
+              <Button
+                onClick={handleStop}
+                variant="outline"
+                className="h-11 px-3 border-red-500/50 text-red-500 hover:bg-red-500/10"
+                title="End Debate"
+              >
+                <Square className="w-4 h-4" />
+              </Button>
+            </div>
+          )}
+
+          {/* Idle: Send */}
+          {status === "idle" && (
+            <Button
+              onClick={handleSend}
+              disabled={!input.trim()}
+              className="bg-primary hover:bg-primary/90 text-primary-foreground h-11 px-4 shadow-lg shadow-primary/20"
+            >
+              <Send className="w-4 h-4" />
+            </Button>
+          )}
         </div>
       </div>
     </div>
